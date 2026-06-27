@@ -1,0 +1,17 @@
+{
+  "name": "aura-framework",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "aura": "./dist/cli.js"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts build --root ./playground",
+    "build:core": "tsc"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "@types/node": "^20.11.0"
+  }
+}
