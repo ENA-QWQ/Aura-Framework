@@ -12,6 +12,7 @@ export async function runBuild(root: string) {
     const startTime = Date.now();
     const userConfig = await loadConfig(root);
     const ctx = new Context(userConfig);
+
     const plugins = await discoverAndLoadPlugins(userConfig);
     console.log(`[Aura] Loaded plugins: ${plugins.map(p => p.manifest.name).join(', ') || 'none'}`);
 
@@ -23,6 +24,7 @@ export async function runBuild(root: string) {
     await runHook(plugins, 'fetchData', ctx);
 
     ctx.routes = await resolveRoutes(ctx);
+    ctx.routes = await runHook(plugins, 'generateRoutes', ctx, ctx.routes) || ctx.routes;
 
     for (const plugin of plugins) {
         const { entry } = plugin.manifest;
