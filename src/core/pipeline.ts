@@ -1,18 +1,45 @@
 import { mkdir, writeFile, cp, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
-import { pathToFileURL } from 'url';
 import { Context } from './context.js';
 import { loadConfig } from './config.js';
 import { discoverAndLoadPlugins, runHook } from './plugin.js';
 import { resolveRoutes } from './router.js';
 import { renderRoute } from './renderer.js';
 
+function validateThemeStyles(cssContent: string) {
+    const requiredVariables = [
+        '--aura-color-primary',
+        '--aura-color-text',
+        '--aura-color-border',
+        '--aura-font-sans',
+        '--aura-space-md',
+        '--aura-radius-md'
+    ];
+
+    const requiredClasses = [
+        '.aura-ui-btn',
+        '.aura-ui-card',
+        '.aura-ui-input',
+        '.aura-ui-badge',
+        '.aura-ui-typography-h1'
+    ];
+
+    const missingVariables = requiredVariables.filter(v => !cssContent.includes(v));
+    const missingClasses = requiredClasses.filter(c => !cssContent.includes(c));
+
+    if (missingVariables.length > 0 || missingClasses.length > 0) {
+        console.error('[Aura] Theme styles validation failed.');
+        if (missingVariables.length > 0) console.error(`[Aura] Missing CSS variables: ${missingVariables.join(', ')}`);
+        if (missingClasses.length > 0) console.error(`[Aura] Missing CSS classes: ${missingClasses.join(', ')}`);
+        process.exit(1);
+    }
+}
+
 export async function runBuild(root: string) {
     console.log('[Aura] Starting build pipeline...');
     const startTime = Date.now();
     const userConfig = await loadConfig(root);
     const ctx = new Context(userConfig);
-
     const plugins = await discoverAndLoadPlugins(userConfig);
     console.log(`[Aura] Loaded plugins: ${plugins.map(p => p.manifest.name).join(', ') || 'none'}`);
 
@@ -25,6 +52,17 @@ export async function runBuild(root: string) {
 
     ctx.routes = await resolveRoutes(ctx);
     ctx.routes = await runHook(plugins, 'generateRoutes', ctx, ctx.routes) || ctx.routes;
+
+    const themeDir = join(ctx.config.srcDir, 'themes', ctx.config.theme);
+    const themeStylesPath = join(themeDir, 'styles.css');
+    try {
+        const themeStyles = await readFile(themeStylesPath, 'utf-8');
+        validateThemeStyles(themeStyles);
+        ctx.assets.add('css', themeStyles, 'head', 'theme.css', 'theme');
+    } catch (e) {
+        console.error(`[Aura] Theme styles not found or invalid: ${themeStylesPath}`);
+        process.exit(1);
+    }
 
     for (const plugin of plugins) {
         const { entry } = plugin.manifest;
@@ -49,15 +87,6 @@ export async function runBuild(root: string) {
                 await writeFile(join(pluginDistDir, filename), content);
             } catch (e) { console.warn(`[Aura] Browser entry not found: ${srcFile}`); }
         }
-    }
-
-    const themeDir = join(ctx.config.srcDir, 'themes', ctx.config.theme);
-    const themeStylesPath = join(themeDir, 'styles.css');
-    try {
-        const themeStyles = await readFile(themeStylesPath, 'utf-8');
-        ctx.assets.add('css', themeStyles, 'head', 'theme.css', 'theme');
-    } catch (e) {
-        console.warn(`[Aura] Theme styles not found: ${themeStylesPath}`);
     }
 
     await mkdir(ctx.config.outDir, { recursive: true });

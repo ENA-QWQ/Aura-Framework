@@ -12,6 +12,8 @@
 
 插件通过在 `aura.config.ts` 的 `plugins` 数组中列出其 `name` 来启用。
 
+**核心原则：** 插件负责提供符合标准契约的数据和逻辑，主题负责提供视觉表现和布局结构。插件注入 UI 时必须遵循 [Aura 标准生态契约](CONTRACT.zh.md) 中的视觉一致性协议。
+
 ---
 
 ## 2. 目录结构
@@ -42,7 +44,7 @@ Aura 在构建开始时扫描该目录，并加载所有在用户配置 `plugins
 | `entry`       | object                             | 否   | 入口文件路径配置。 |
 | `entry.node`  | string                             | 否   | Node.js 入口文件路径（相对于插件目录）。该文件应导出 `PluginHooks` 对象或默认导出包含钩子方法的对象。 |
 | `entry.browser`| string                            | 否   | 浏览器脚本路径（注入到 `<body>` 中作为外部 `<script type="module">`）。 |
-| `entry.styles` | string                            | 否   | 样式表路径（注入到 `<head>` 中作为内联 `<style>`）。 |
+| `entry.styles` | string                            | 否   | 样式表路径（注入到 `<head>` 中作为内联 `<style>`）。**必须使用 `.aura-ui-*` 类名和 `--aura-*` 变量。** |
 
 ### SchemaDefinition 类型
 
@@ -123,6 +125,7 @@ interface AuraContext {
   data: DataStore;                   // 跨插件数据存储
   assets: AssetManager;              // 资源管理器
   components: Map<string, Function>; // 组件注册表（供模板使用）
+  viewRegistry: Map<string, Function>; // 视图注册表（供主题渲染引擎使用）
 }
 ```
 
@@ -161,6 +164,16 @@ class AssetManager {
 
 **注意：** 框架会自动处理 `entry.browser` 和 `entry.styles` —— 它们会在内部通过 `assets.add()` 添加。你只需为动态生成的资源调用 `assets.add()`。
 
+### ViewRegistry
+
+用于注册自定义视图渲染函数。主题渲染引擎会根据 `themeOptions.slots` 中的 `view` 标识符从此注册表中查找渲染函数。
+
+```typescript
+ctx.viewRegistry.set('my-custom-view', (data, ctx, props) => {
+  return `<div class="aura-ui-card">${data.title}</div>`;
+});
+```
+
 ---
 
 ## 6. 集合（Collection）与路由（Route）
@@ -189,16 +202,16 @@ interface CollectionItem {
 ```typescript
 interface Route {
   path: string;          // 例如 "/posts/hello-world"
-  template: string;      // 模板文件名（不含扩展名），位于主题的 `templates/` 目录下
-  modules: string[];     // 保留字段，供将来使用
+  pageType: string;      // 页面类型标识符，用于匹配主题布局（如 'home', 'doc', 'page'）
   collection?: string;   // 可选 – 你可以用它来关联集合，但核心渲染器并不使用它
-  pageType?: string;     // 可选 – 可用于自定义逻辑
   data: Record<string, any>; // 传递给模板的数据
 }
 ```
 
-路由在 `generateRoutes` 中生成。之后它们会由主题的模板引擎渲染。  
+路由在 `generateRoutes` 中生成。之后它们会由主题的渲染引擎根据 `pageType` 和 `themeOptions` 进行渲染。  
 对于每个路由，框架会写入 `outDir/path/index.html`（如果 `path === '/'` 则写入 `outDir/index.html`）。
+
+**注意：** `template` 和 `modules` 字段已从 Route 接口中移除，渲染完全由主题驱动。
 
 ---
 
@@ -276,7 +289,7 @@ export default {
     return [{ name: 'posts', items }];
   },
 
-  // 将文章数据存入 DataStore，供其他插件或模板使用
+  // 将文章数据存入 DataStore，供其他插件或主题插槽使用
   async fetchData(ctx) {
     const postsCollection = ctx.collections.find(c => c.name === 'posts');
     if (!postsCollection) return {};
@@ -292,14 +305,12 @@ export default {
       ...routes,
       {
         path: '/posts',
-        template: 'post-list',   // 模板文件：post-list.ts
-        modules: [],
-        data: { posts }          // 传递给模板的数据
+        pageType: 'post-list',   // 页面类型，用于匹配主题布局
+        data: { posts }          // 传递给主题插槽的数据源
       },
       ...posts.map(post => ({
         path: `/posts/${post.slug}`,
-        template: 'post-detail', // 模板文件：post-detail.ts
-        modules: [],
+        pageType: 'post-detail', // 页面类型，用于匹配主题布局
         data: { post }
       }))
     ];
@@ -315,34 +326,33 @@ export default {
 2. 集合被存入 `ctx.collections`。
 3. `fetchData` 读取该集合并将其存入 `ctx.data` 下的 `blog.posts`。
 4. `generateRoutes` 使用 `ctx.collections` 构建路由，并将文章数据直接传递到每个路由的 `data` 字段。
-5. 主题模板（例如 `post-list.ts` 和 `post-detail.ts`）在渲染时会接收到 `data` 对象作为参数。
+5. 主题渲染引擎根据 `pageType` 和 `themeOptions` 中的 `slots` 配置，从 `ctx.data` 或 `route.data` 获取数据并渲染视图。
 
-### 主题模板示例
+### 主题配置示例
 
-在主题的 `templates/post-list.ts` 中：
-
-```typescript
-export default function render(ctx, route, data) {
-  // data 就是你在 route.data 中传入的对象
-  const posts = data.posts || [];
-  return `
-    <ul>
-      ${posts.map(p => `<li><a href="/posts/${p.slug}">${p.metadata.title}</a></li>`).join('')}
-    </ul>
-  `;
-}
-```
-
-在 `templates/post-detail.ts` 中：
+在用户的 `aura.config.ts` 中：
 
 ```typescript
-export default function render(ctx, route, data) {
-  const post = data.post;
-  return `
-    <h1>${post.metadata.title}</h1>
-    <div>${post.content}</div>
-  `;
-}
+export default {
+  theme: 'aura-canvas',
+  plugins: ['blog'],
+  themeOptions: {
+    bindings: {
+      blogPosts: { source: 'datastore', target: 'blog:posts' }
+    },
+    layouts: {
+      'post-list': 'two-col-left',
+      'post-detail': 'single',
+      default: 'single'
+    },
+    slots: {
+      'content-before': {
+        view: 'post-list-view', // 主题提供的视图标识符
+        binding: 'blogPosts'
+      }
+    }
+  }
+};
 ```
 
 ---
@@ -359,7 +369,7 @@ const tags = new Set();
 posts.forEach(p => (p.metadata.tags || []).forEach(t => tags.add(t)));
 const tagRoutes = [...tags].map(tag => ({
   path: `/tags/${tag}`,
-  template: 'tag',
+  pageType: 'tag-archive',
   data: { tag, posts: posts.filter(p => (p.metadata.tags || []).includes(tag)) }
 }));
 ```
@@ -387,6 +397,7 @@ const tagRoutes = [...tags].map(tag => ({
 - `entry.styles` 作为内联 `<style>` 注入到 `<head>` 中。
 - 如果你需要添加动态客户端代码，可以从钩子（例如 `transformHtml` 或 `buildEnd`）中调用 `ctx.assets.add('js', code, 'body', 'dynamic.js', 'myplugin')`。
 - 框架在每个页面中注入全局事件总线 `window.AuraBus`。你可以用它来在不同浏览器脚本之间通信。
+- **重要：** 插件样式必须遵循 [Aura 标准生态契约](CONTRACT.zh.md)，使用 `.aura-ui-*` 类名和 `--aura-*` 变量以确保视觉一致性。
 
 ---
 
@@ -403,7 +414,8 @@ const tagRoutes = [...tags].map(tag => ({
 - `loadContent`、`transformCollections` 和 `generateRoutes` 会**替换**整个数组，而不是合并。如果你想保留之前的值，必须显式复制（例如 `[...previous, ...new]`）。
 - `fetchData` 期望返回一个普通对象。如果返回 `undefined`，则不会存储任何数据。
 - 路由上的 `collection` 字段不被核心渲染器使用——它仅用于信息传递。你必须将实际数据放在 `data` 中传递。
-- 主题模板接收完整的 `ctx`、`route` 对象以及路由中的 `data` 对象。它们也可以通过 `ctx.data.getFlat()` 获取其他数据。
+- 主题渲染引擎通过 `ctx.data.getFlat()` 和 `route.data` 获取数据，并通过 `themeOptions` 中的 `bindings` 和 `slots` 配置进行映射。
+- 插件不再直接提供模板文件，而是通过数据绑定和视图标识符与主题协作。
 
 ---
 
@@ -414,10 +426,14 @@ const tagRoutes = [...tags].map(tag => ({
 3. 调用 `buildStart` 钩子。
 4. 依次执行 `loadContent` → `transformCollections` → `fetchData` → `generateRoutes`。
 5. 复制并注册 `entry.browser` 和 `entry.styles` 指定的资源文件。
-6. 加载主题样式。
+6. 加载并验证主题样式（检查 CSS 变量和原子类名）。
 7. 对每个路由：
-    - 渲染模板 → 布局 → 通过 `transformHtml` 注入资源。
-    - 写入 HTML 文件。
+   - 根据 `pageType` 和 `themeOptions` 确定布局。
+   - 遍历 `slots` 配置，从 `ctx.data` 或 `route.data` 获取数据。
+   - 根据 `view` 标识符查找渲染函数（优先从 `ctx.viewRegistry`，其次从主题 `views/` 目录）。
+   - 调用布局函数组装最终 HTML。
+   - 通过 `transformHtml` 注入资源。
+   - 写入 HTML 文件。
 8. 调用 `buildEnd` 钩子。
 
 ---

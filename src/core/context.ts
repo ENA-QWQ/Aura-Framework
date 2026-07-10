@@ -1,22 +1,39 @@
 import { SchemaDefinition, validate } from './schema.js';
 
 export interface SiteConfig { title: string; description?: string; }
-export interface RouteBlueprint { path: string; template: string; modules?: string[]; collection?: string; pageType?: string; }
+
+export interface RouteBlueprint {
+    path: string;
+    collection?: string;
+    pageType?: string;
+}
+
 export interface UserConfig {
     site: SiteConfig;
     theme: string;
     plugins: string[];
     routes: RouteBlueprint[];
+    themeOptions?: any;
     [key: string]: any;
 }
+
 export interface ResolvedConfig extends UserConfig {
     root: string;
     outDir: string;
     srcDir: string;
+    themeOptions: any;
 }
+
 export interface CollectionItem { id: string; slug: string; collection: string; metadata: Record<string, any>; content: string; }
 export interface Collection { name: string; items: CollectionItem[]; }
-export interface Route { path: string; template: string; modules: string[]; collection?: string; data: Record<string, any>; pageType?: string; }
+
+export interface Route {
+    path: string;
+    pageType: string;
+    collection?: string;
+    data: Record<string, any>;
+}
+
 export interface AssetDescriptor { type: 'css' | 'js'; content: string; inject: 'head' | 'body'; filename?: string; pluginName?: string; }
 
 export class DataStore {
@@ -38,7 +55,9 @@ export class DataStore {
 
 export class AssetManager {
     private assets: AssetDescriptor[] = [];
-    add(type: 'css' | 'js', content: string, inject: 'head' | 'body', filename?: string, pluginName?: string) { this.assets.push({ type, content, inject, filename, pluginName }); }
+    add(type: 'css' | 'js', content: string, inject: 'head' | 'body', filename?: string, pluginName?: string) {
+        this.assets.push({ type, content, inject, filename, pluginName });
+    }
     getAssets(): AssetDescriptor[] { return this.assets; }
 }
 
@@ -49,6 +68,7 @@ export interface AuraContext {
     data: DataStore;
     assets: AssetManager;
     components: Map<string, Function>;
+    viewRegistry: Map<string, Function>;
 }
 
 export class Context implements AuraContext {
@@ -58,13 +78,20 @@ export class Context implements AuraContext {
     data: DataStore = new DataStore();
     assets: AssetManager = new AssetManager();
     components: Map<string, Function> = new Map();
-    constructor(config: ResolvedConfig) { this.config = config; }
+    viewRegistry: Map<string, Function> = new Map();
+
+    constructor(config: ResolvedConfig) {
+        this.config = config;
+    }
 }
 
 export interface PluginModule { name: string; component?: string; }
 
 export interface PluginManifest {
-    name: string; version?: string; enforce?: 'pre' | 'normal' | 'post'; dependencies?: string[];
+    name: string;
+    version?: string;
+    enforce?: 'pre' | 'normal' | 'post';
+    dependencies?: string[];
     schema?: Record<string, SchemaDefinition>;
     modules?: PluginModule[];
     entry?: { node?: string; browser?: string; styles?: string; };
