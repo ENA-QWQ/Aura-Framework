@@ -7,17 +7,18 @@
   },
   "scripts": {
     "dev": "tsx src/cli.ts build --root ./playground",
-    "build:core": "tsc"
-  },
-  "devDependencies": {
-    "@types/markdown-it": "^14.1.2",
-    "@types/node": "^20.11.0",
-    "tsx": "^4.7.0",
-    "typescript": "^5.4.0"
+    "build:core": "tsc",
+    "prepublishOnly": "tsc"
   },
   "dependencies": {
     "gray-matter": "^4.0.3",
     "markdown-it": "^14.2.0",
-    "markdown-it-anchor": "^9.2.0"
+    "markdown-it-anchor": "^9.2.0",
+    "tsx": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
   }
 }

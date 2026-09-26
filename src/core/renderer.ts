@@ -1,69 +1,83 @@
 import { join } from 'path';
 import { pathToFileURL } from 'url';
 import { AuraContext, Route } from './context.js';
+import { resolveBinding, resolvePath } from './utils.js';
 
 const RUNTIME_BUS = `<script>window.AuraBus={_e:{},on:function(k,fn){(this._e[k]=this._e[k]||[]).push(fn);},emit:function(k,d){(this._e[k]||[]).forEach(fn=>fn(d));}};</script>`;
 
-function resolvePath(obj: any, path: string): any {
-    return path.split('.').reduce((acc, key) => acc?.[key], obj);
+async function loadModuleFunction(basePath: string): Promise<Function | undefined> {
+    const candidates = [`${basePath}.ts`, `${basePath}.js`];
+    for (const candidate of candidates) {
+        try {
+            const mod = await import(pathToFileURL(candidate).href);
+            const fn = mod.default || mod.render;
+            if (typeof fn === 'function') return fn;
+        } catch (e) {
+        }
+    }
+    return undefined;
 }
 
 export async function renderRoute(route: Route, ctx: AuraContext): Promise<string> {
     const themeDir = join(ctx.config.srcDir, 'themes', ctx.config.theme);
-    const { layouts = {}, slots = {}, bindings = {} } = ctx.config.themeOptions || {};
+    const themeOptions = ctx.config.themeOptions || {};
+    const layouts = themeOptions.layouts || {};
+    const bindings = themeOptions.bindings || {};
+    const slotsConfig: Record<string, any> = { ...(themeOptions.slots || {}) };
+
+    if (!slotsConfig['main']) {
+        slotsConfig['main'] = { view: 'page' };
+    }
+
     const layoutName = layouts[route.pageType] || layouts['default'] || 'single';
-    const layoutPath = join(themeDir, 'layouts', `${layoutName}.ts`);
+    const layoutPath = join(themeDir, 'layouts', layoutName);
 
-    let layoutFn: Function = async (ctx: AuraContext, slotsHtml: Record<string, string>, route: Route) => {
-        return `<html><head></head><body>${Object.values(slotsHtml).join('')}</body></html>`;
-    };
-
-    try {
-        const layoutMod = await import(pathToFileURL(layoutPath).href);
-        const modFn = layoutMod.default || layoutMod.render;
-        if (typeof modFn === 'function') layoutFn = modFn;
-    } catch (e) {
-        console.warn(`[Aura] Layout "${layoutName}" not found for theme ${ctx.config.theme}`);
+    let layoutFn = await loadModuleFunction(layoutPath);
+    if (!layoutFn) {
+        console.warn(`[Aura] Layout "${layoutName}" not found for theme "${ctx.config.theme}", using fallback.`);
+        layoutFn = async (_ctx: AuraContext, slotsHtml: Record<string, string>) =>
+            `<!DOCTYPE html><html><head></head><body>${Object.values(slotsHtml).join('')}</body></html>`;
     }
 
     const slotsHtml: Record<string, string> = {};
-    for (const [slotName, slotConfig] of Object.entries(slots as Record<string, any>)) {
-        let data: any = {};
+
+    for (const [slotName, slotConfig] of Object.entries(slotsConfig)) {
+        let data: any;
 
         if (slotConfig.binding) {
             const bindingConfig = bindings[slotConfig.binding];
-            if (bindingConfig) {
-                const flatData = ctx.data.getFlat();
-                data = flatData[bindingConfig.namespace]?.[bindingConfig.key] ?? {};
-            }
+            data = resolveBinding(bindingConfig, ctx);
         } else if (slotConfig.source) {
-            data = resolvePath(route.data, slotConfig.source) ?? {};
+            data = resolvePath(route.data, slotConfig.source);
+        } else if (slotName === 'main') {
+            data = route.data;
         }
 
         const viewName = slotConfig.view;
-        let viewFn: Function | undefined = ctx.viewRegistry.get(viewName);
+        let viewFn: Function | undefined = viewName
+            ? ctx.viewRegistry.get(viewName)
+            : undefined;
 
-        if (!viewFn) {
-            const viewPath = join(themeDir, 'views', `${viewName}.ts`);
-            try {
-                const viewMod = await import(pathToFileURL(viewPath).href);
-                const modFn = viewMod.default || viewMod.render;
-                if (typeof modFn === 'function') viewFn = modFn;
-            } catch (e) {
-                const fallbackViewPath = join(themeDir, 'views', 'list.ts');
-                try {
-                    const fallbackMod = await import(pathToFileURL(fallbackViewPath).href);
-                    const modFn = fallbackMod.default || fallbackMod.render;
-                    if (typeof modFn === 'function') viewFn = modFn;
-                } catch (err) {
-                    viewFn = () => '';
-                }
-            }
+        if (!viewFn && viewName) {
+            viewFn = await loadModuleFunction(join(themeDir, 'views', viewName));
         }
 
-        if (!viewFn) viewFn = () => '';
+        if (!viewFn) {
+            viewFn = await loadModuleFunction(join(themeDir, 'views', 'list'));
+        }
 
-        slotsHtml[slotName] = await viewFn(data, ctx, slotConfig.props || {});
+        if (!viewFn) {
+            slotsHtml[slotName] = '';
+            continue;
+        }
+
+        try {
+            const html = await viewFn(data, ctx, slotConfig.props || {});
+            slotsHtml[slotName] = typeof html === 'string' ? html : '';
+        } catch (e) {
+            console.error(`[Aura] View "${viewName}" failed in slot "${slotName}":`, e);
+            slotsHtml[slotName] = '';
+        }
     }
 
     let pageHtml = await layoutFn(ctx, slotsHtml, route);
@@ -72,17 +86,46 @@ export async function renderRoute(route: Route, ctx: AuraContext): Promise<strin
     let bodyInjections = '';
 
     for (const asset of ctx.assets.getAssets()) {
+        const link = asset.filename && asset.pluginName
+            ? `/assets/plugins/${asset.pluginName}/${asset.filename}`
+            : null;
+
         if (asset.inject === 'head') {
-            headInjections += asset.type === 'css' ? `\n<style>\n${asset.content}\n</style>` : `\n<script type="module">\n${asset.content}\n</script>`;
+            if (asset.type === 'css') {
+                headInjections += `\n<style>\n${asset.content}\n</style>`;
+            } else if (link) {
+                headInjections += `\n<script type="module" src="${link}"></script>`;
+            } else {
+                headInjections += `\n<script type="module">\n${asset.content}\n</script>`;
+            }
         } else {
-            if (asset.type === 'css') bodyInjections += `\n<style>\n${asset.content}\n</style>`;
-            else if (asset.filename && asset.pluginName) bodyInjections += `\n<script type="module" src="./assets/plugins/${asset.pluginName}/${asset.filename}"></script>`;
-            else bodyInjections += `\n<script type="module">\n${asset.content}\n</script>`;
+            if (asset.type === 'css') {
+                bodyInjections += `\n<style>\n${asset.content}\n</style>`;
+            } else if (link) {
+                bodyInjections += `\n<script type="module" src="${link}"></script>`;
+            } else {
+                bodyInjections += `\n<script type="module">\n${asset.content}\n</script>`;
+            }
         }
     }
 
-    if (headInjections) pageHtml = pageHtml.replace('</head>', `${headInjections}\n</head>`);
-    if (bodyInjections) pageHtml = pageHtml.replace('</body>', `${bodyInjections}\n</body>`);
+    if (headInjections) {
+        if (pageHtml.includes('</head>')) {
+            pageHtml = pageHtml.replace('</head>', `${headInjections}\n</head>`);
+        } else if (pageHtml.includes('<body')) {
+            pageHtml = pageHtml.replace('<body', `${headInjections}\n<body`);
+        } else {
+            pageHtml = headInjections + pageHtml;
+        }
+    }
+
+    if (bodyInjections) {
+        if (pageHtml.includes('</body>')) {
+            pageHtml = pageHtml.replace('</body>', `${bodyInjections}\n</body>`);
+        } else {
+            pageHtml = pageHtml + bodyInjections;
+        }
+    }
 
     return pageHtml;
 }

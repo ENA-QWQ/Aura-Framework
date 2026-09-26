@@ -6,7 +6,7 @@ import { discoverAndLoadPlugins, runHook } from './plugin.js';
 import { resolveRoutes } from './router.js';
 import { renderRoute } from './renderer.js';
 
-function validateThemeStyles(cssContent: string) {
+function collectMissingThemeStyles(cssContent: string): string[] {
     const requiredVariables = [
         '--aura-color-primary',
         '--aura-color-text',
@@ -24,90 +24,122 @@ function validateThemeStyles(cssContent: string) {
         '.aura-ui-typography-h1'
     ];
 
-    const missingVariables = requiredVariables.filter(v => !cssContent.includes(v));
-    const missingClasses = requiredClasses.filter(c => !cssContent.includes(c));
-
-    if (missingVariables.length > 0 || missingClasses.length > 0) {
-        console.error('[Aura] Theme styles validation failed.');
-        if (missingVariables.length > 0) console.error(`[Aura] Missing CSS variables: ${missingVariables.join(', ')}`);
-        if (missingClasses.length > 0) console.error(`[Aura] Missing CSS classes: ${missingClasses.join(', ')}`);
-        process.exit(1);
+    const missing: string[] = [];
+    for (const v of requiredVariables) {
+        if (!cssContent.includes(v)) missing.push(`CSS variable ${v}`);
     }
+    for (const c of requiredClasses) {
+        if (!cssContent.includes(c)) missing.push(`CSS class ${c}`);
+    }
+    return missing;
 }
 
 export async function runBuild(root: string) {
     console.log('[Aura] Starting build pipeline...');
     const startTime = Date.now();
+
     const userConfig = await loadConfig(root);
     const ctx = new Context(userConfig);
     const plugins = await discoverAndLoadPlugins(userConfig);
+
     console.log(`[Aura] Loaded plugins: ${plugins.map(p => p.manifest.name).join(', ') || 'none'}`);
 
     await runHook(plugins, 'buildStart', ctx);
 
-    ctx.collections = await runHook(plugins, 'loadContent', ctx, []) || [];
-    ctx.collections = await runHook(plugins, 'transformCollections', ctx, ctx.collections) || ctx.collections;
+    ctx.collections = (await runHook(plugins, 'loadContent', ctx, [])) || [];
+    ctx.collections =
+        (await runHook(plugins, 'transformCollections', ctx, ctx.collections)) || ctx.collections;
 
     await runHook(plugins, 'fetchData', ctx);
 
     ctx.routes = await resolveRoutes(ctx);
-    ctx.routes = await runHook(plugins, 'generateRoutes', ctx, ctx.routes) || ctx.routes;
+    ctx.routes = (await runHook(plugins, 'generateRoutes', ctx, ctx.routes)) || ctx.routes;
 
     const themeDir = join(ctx.config.srcDir, 'themes', ctx.config.theme);
     const themeStylesPath = join(themeDir, 'styles.css');
+
+    let themeStyles: string;
     try {
-        const themeStyles = await readFile(themeStylesPath, 'utf-8');
-        validateThemeStyles(themeStyles);
-        ctx.assets.add('css', themeStyles, 'head', 'theme.css', 'theme');
+        themeStyles = await readFile(themeStylesPath, 'utf-8');
     } catch (e) {
-        console.error(`[Aura] Theme styles not found or invalid: ${themeStylesPath}`);
-        process.exit(1);
+        throw new Error(`[Aura] Theme styles not found: ${themeStylesPath}`);
     }
 
+    const missing = collectMissingThemeStyles(themeStyles);
+    if (missing.length > 0) {
+        console.warn('[Aura] Theme styles validation warnings:');
+        for (const m of missing) {
+            console.warn(`  - Missing ${m}`);
+        }
+    }
+
+    ctx.assets.add('css', themeStyles, 'head', 'theme.css', 'theme');
+
     for (const plugin of plugins) {
-        const { entry } = plugin.manifest;
+        const entry = plugin.manifest.entry;
+        if (!entry) continue;
+
         const pluginDistDir = join(ctx.config.outDir, 'assets', 'plugins', plugin.manifest.name);
         await mkdir(pluginDistDir, { recursive: true });
 
-        if (entry?.styles) {
+        if (entry.styles) {
             const srcFile = join(plugin.dir, entry.styles);
             try {
                 const content = await readFile(srcFile, 'utf-8');
                 const filename = entry.styles.split('/').pop()!;
                 ctx.assets.add('css', content, 'head', filename, plugin.manifest.name);
                 await writeFile(join(pluginDistDir, filename), content);
-            } catch (e) { console.warn(`[Aura] Styles not found: ${srcFile}`); }
+            } catch (e) {
+                console.warn(`[Aura] Plugin styles not found: ${srcFile}`);
+            }
         }
-        if (entry?.browser) {
+
+        if (entry.browser) {
             const srcFile = join(plugin.dir, entry.browser);
             try {
                 const content = await readFile(srcFile, 'utf-8');
                 const filename = entry.browser.split('/').pop()!;
                 ctx.assets.add('js', content, 'body', filename, plugin.manifest.name);
                 await writeFile(join(pluginDistDir, filename), content);
-            } catch (e) { console.warn(`[Aura] Browser entry not found: ${srcFile}`); }
+            } catch (e) {
+                console.warn(`[Aura] Plugin browser entry not found: ${srcFile}`);
+            }
         }
     }
 
     await mkdir(ctx.config.outDir, { recursive: true });
+
     const publicDir = join(ctx.config.srcDir, 'public');
-    try { await cp(publicDir, ctx.config.outDir, { recursive: true }); } catch (e) {}
+    try {
+        await cp(publicDir, ctx.config.outDir, { recursive: true });
+    } catch (e) {
+    }
 
     for (const route of ctx.routes) {
         try {
-            let html = await renderRoute(route, ctx);
-            html = await runHook(plugins, 'transformHtml', ctx, html, [route]) || html;
+            const normalized = route.path.replace(/^\/+/, '');
 
-            const outPath = route.path === '/'
+            if (normalized.split('/').some(seg => seg === '..')) {
+                console.error(`[Aura] Skipping unsafe route path: ${route.path}`);
+                continue;
+            }
+
+            let html = await renderRoute(route, ctx);
+            html = (await runHook(plugins, 'transformHtml', ctx, html, [route])) || html;
+
+            const outPath = normalized === ''
                 ? join(ctx.config.outDir, 'index.html')
-                : join(ctx.config.outDir, route.path, 'index.html');
+                : join(ctx.config.outDir, normalized, 'index.html');
 
             await mkdir(dirname(outPath), { recursive: true });
             await writeFile(outPath, html, 'utf-8');
             console.log(`[Aura] Generated: ${outPath}`);
-        } catch (error) { console.error(`[Aura] Failed to render route ${route.path}:`, error); }
+        } catch (error) {
+            console.error(`[Aura] Failed to render route ${route.path}:`, error);
+        }
     }
 
     await runHook(plugins, 'buildEnd', ctx);
+
     console.log(`[Aura] Build completed in ${Date.now() - startTime}ms.`);
 }

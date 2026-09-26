@@ -1,16 +1,35 @@
-import { resolve } from 'path';
-import { runBuild } from './core/pipeline.js';
+#!/usr/bin/env node
+import { register } from 'tsx/esm/api';
 
-const args = process.argv.slice(2);
-const command = args[0];
-const rootIndex = args.indexOf('--root');
-const root = rootIndex !== -1 ? resolve(args[rootIndex + 1]) : process.cwd();
+register();
 
-if (command === 'build') {
-    runBuild(root).catch(err => {
-        console.error('[Aura] Fatal error:', err);
+async function main() {
+    const { resolve } = await import('path');
+    const { runBuild } = await import('./core/pipeline.js');
+
+    const args = process.argv.slice(2);
+    const command = args[0];
+    const rootIndex = args.indexOf('--root');
+
+    let root = process.cwd();
+    if (rootIndex !== -1) {
+        const rootValue = args[rootIndex + 1];
+        if (!rootValue || rootValue.startsWith('--')) {
+            console.error('[Aura] Missing value for --root');
+            process.exit(1);
+        }
+        root = resolve(rootValue);
+    }
+
+    if (command === 'build') {
+        await runBuild(root);
+    } else {
+        console.log('Usage: aura build [--root <path>]');
         process.exit(1);
-    });
-} else {
-    console.log('Usage: aura build [--root <path>]');
+    }
 }
+
+main().catch(err => {
+    console.error('[Aura] Fatal error:', err);
+    process.exit(1);
+});

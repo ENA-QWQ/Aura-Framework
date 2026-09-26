@@ -27,6 +27,40 @@ export interface ResolvedConfig extends UserConfig {
 export interface CollectionItem { id: string; slug: string; collection: string; metadata: Record<string, any>; content: string; }
 export interface Collection { name: string; items: CollectionItem[]; }
 
+export interface AuraStandardItem {
+    id: string;
+    slug: string;
+    type: string;
+    url?: string;
+    title: string;
+    content?: string;
+    excerpt?: string;
+    metadata: {
+        date?: string;
+        updated?: string;
+        author?: string;
+        tags?: string[];
+        category?: string;
+        coverImage?: string;
+        [key: string]: any;
+    };
+    raw?: Record<string, any>;
+}
+
+export interface StandardNavItem {
+    title: string;
+    url?: string;
+    children?: StandardNavItem[];
+    active?: boolean;
+    icon?: string;
+}
+
+export interface StandardTocItem {
+    id: string;
+    text: string;
+    level: number;
+}
+
 export interface Route {
     path: string;
     pageType: string;

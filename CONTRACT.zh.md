@@ -194,6 +194,7 @@ async fetchData(ctx) {
 主题必须在 HTML 骨架中预留以下标准逻辑插槽。主题不应硬编码插槽内的业务组件。
 
 -   `header`: 全局顶部区域。
+-   `main`: 主内容区。
 -   `footer`: 全局底部区域。
 -   `aside-start`: 侧边栏起始位置（LTR 语言下为左侧）。
 -   `aside-end`: 侧边栏结束位置（LTR 语言下为右侧）。
@@ -271,8 +272,8 @@ default: 'single'
 **标准布局标识符参考：**
 
 | 标识符          | 说明                         | 
-| :-------------- | :--------------------------- |
-| `single`        | 单栏，无侧边栏               |
+| :-------------- | :--------------------------- | 
+| `single`        | 单栏，无侧边栏               | 
 | `two-col-left`  | 左侧边栏 + 右侧主内容        | 
 | `two-col-right` | 左侧主内容 + 右侧边栏        | 
 | `three-col`     | 左侧栏 + 中间主内容 + 右侧栏 |
@@ -286,6 +287,7 @@ default: 'single'
 | 插槽位置         | 说明                     |
 | :--------------- | :----------------------- |
 | `header`         | 页面顶部导航区域         |
+| `main`           | 主内容区                 |
 | `footer`         | 页面底部信息区域         |
 | `aside-start`    | 侧边栏起始位置（通常为左） |
 | `aside-end`      | 侧边栏结束位置（通常为右） |
@@ -327,6 +329,11 @@ slots: {
 
 ```typescript
 slots: {
+    // 主内容区，从当前路由数据中读取
+    'main': {
+        source: 'route.data'
+    },
+
     // 左侧边栏渲染树状导航，数据来自 bindings.sidebar
     'aside-start': {
         view: 'tree-nav',
@@ -383,6 +390,7 @@ export default {
         },
 
         slots: {
+            'main': { source: 'route.data' },
             'aside-start': { view: 'tree-nav', binding: 'sidebar' },
             'aside-end': { view: 'toc', source: 'metadata.toc' },
             'content-before': { view: 'breadcrumbs', source: 'metadata.breadcrumbs' },
@@ -397,7 +405,7 @@ export default {
 
 ---
 
-## 6. 插件 UI 注入协
+## 6. 插件 UI 注入协议
 
 本节规范插件注入 UI 的三种合法途径，确保既不破坏主题通用性，又能实现复杂交互组件的视觉一致性。
 
@@ -408,6 +416,8 @@ export default {
 
 ### 6.2 重量级注入 `entry.browser` + 挂载点
 
+> **状态说明：** 本节描述的挂载点协议为预留接口，当前版本的渲染器尚未自动渲染 `data-aura-mount` 容器。主题可以在自定义布局中手动添加该容器以启用此协议。
+
 **工作方式**：
 1.  插件在 `manifest.json` 中声明 `entry.browser`。
 2.  主题在对应插槽中渲染一个挂载容器：`<div data-aura-mount="comments"></div>`。
@@ -415,6 +425,8 @@ export default {
     **要求**：插件通过 `entry.styles` 自带完整 CSS，但**必须使用 `.aura-ui-*` 类名和 `--aura-*` 变量**。
 
 ### 6.3 构建时组件注册 `ctx.components.set()`
+
+> **状态说明：** 本节描述的组件注册协议为预留接口，当前版本的渲染器尚未自动调用 `ctx.components.get()`。主题可以在自定义布局或视图中手动读取该注册表以启用此协议。
 
 **工作方式**：
 1.  插件在 `buildStart` 或 `fetchData` 钩子中注册：`ctx.components.set('aura-comments:ssr', renderFunction)`。

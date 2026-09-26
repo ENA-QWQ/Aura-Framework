@@ -7,7 +7,7 @@
 
 ## 1. 概述
 
-插件是放置在框架根目录 `plugins/` 文件夹（与 `src/` 同级）下的独立目录。  
+插件是放置在**用户项目根目录** `plugins/` 文件夹（与 `aura.config.ts` 同级）下的独立目录。  
 每个插件必须提供一个 `manifest.json` 文件。它也可以提供 Node.js 入口（用于构建时钩子）、浏览器入口（客户端脚本）和样式表。
 
 插件通过在 `aura.config.ts` 的 `plugins` 数组中列出其 `name` 来启用。
@@ -19,16 +19,18 @@
 ## 2. 目录结构
 
 ```
-plugins/
-  my-plugin/
-    manifest.json         # 必需
-    node.js               # 可选，Node.js 钩子
-    browser.js            # 可选，浏览器脚本（ES Module）
-    styles.css            # 可选，样式文件
-    ...                   # 其他资源
+<project-root>/
+  aura.config.ts
+  plugins/
+    my-plugin/
+      manifest.json         # 必需
+      node.js               # 可选，Node.js 钩子
+      browser.js            # 可选，浏览器脚本（ES Module）
+      styles.css            # 可选，样式文件
+      ...                   # 其他资源
 ```
 
-Aura 在构建开始时扫描该目录，并加载所有在用户配置 `plugins` 列表中出现的插件。
+Aura 在构建开始时扫描用户项目根目录下的 `plugins/` 目录，并加载所有在用户配置 `plugins` 列表中出现的插件。
 
 ---
 
@@ -71,8 +73,10 @@ interface SchemaDefinition {
       "items": {
         "type": "object",
         "properties": {
-          "title": { "type": "string", "required": true },
-          "date": { "type": "string" }
+          "id": { "type": "string", "required": true },
+          "slug": { "type": "string", "required": true },
+          "type": { "type": "string", "required": true },
+          "title": { "type": "string", "required": true }
         }
       }
     }
@@ -144,7 +148,7 @@ class DataStore {
 - `namespace` 建议使用你的插件名以避免冲突。
 - 如果提供了 `schema`，会立即验证，验证失败则抛出错误。
 
-在 `fetchData` 中，如果你返回一个对象，Aura 会自动为每个键调用 `ctx.data.set(pluginName, key, value)`，并使用清单中定义的 schema（如果有）。你也可以手动调用 `set()`。
+在 `fetchData` 中，如果你返回一个对象（且不是数组），Aura 会自动为每个键调用 `ctx.data.set(pluginName, key, value)`，并使用清单中定义的 schema（如果有）。你也可以手动调用 `set()`。
 
 ### AssetManager
 
@@ -217,14 +221,16 @@ interface Route {
 
 ## 7. 完整示例：博客插件
 
-这个插件从 `src/posts/` 读取 Markdown 文件，创建 `"posts"` 集合，为每篇文章生成列表路由和详情路由，并将文章数据存入 `DataStore`。
+这个插件从 `src/posts/` 读取 Markdown 文件，创建 `"posts"` 集合，为每篇文章生成列表路由和详情路由，并将符合契约的标准数据存入 `DataStore`。
 
 ### 目录结构
 
 ```
-plugins/blog/
-  manifest.json
-  node.js
+<project-root>/
+  plugins/
+    blog/
+      manifest.json
+      node.js
 ```
 
 ### manifest.json
@@ -240,9 +246,10 @@ plugins/blog/
       "items": {
         "type": "object",
         "properties": {
-          "title": { "type": "string", "required": true },
+          "id": { "type": "string", "required": true },
           "slug": { "type": "string", "required": true },
-          "date": { "type": "string" }
+          "type": { "type": "string", "required": true },
+          "title": { "type": "string", "required": true }
         }
       }
     }
@@ -259,6 +266,20 @@ plugins/blog/
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
 import matter from 'gray-matter'; // 你需要安装这个包
+
+function toStandardItem(item) {
+  return {
+    id: item.id,
+    slug: item.slug,
+    type: 'post',
+    url: `/posts/${item.slug}`,
+    title: item.metadata.title || item.slug,
+    content: item.content,
+    excerpt: item.metadata.excerpt,
+    metadata: item.metadata,
+    raw: item
+  };
+}
 
 export default {
   async loadContent(collections, ctx) {
@@ -289,12 +310,12 @@ export default {
     return [{ name: 'posts', items }];
   },
 
-  // 将文章数据存入 DataStore，供其他插件或主题插槽使用
+  // 将文章数据清洗为契约标准类型后存入 DataStore
   async fetchData(ctx) {
     const postsCollection = ctx.collections.find(c => c.name === 'posts');
     if (!postsCollection) return {};
     // 返回一个对象，该对象会以 "blog" 命名空间存入
-    return { posts: postsCollection.items };
+    return { posts: postsCollection.items.map(toStandardItem) };
   },
 
   async generateRoutes(routes, ctx) {
@@ -306,12 +327,12 @@ export default {
       {
         path: '/posts',
         pageType: 'post-list',   // 页面类型，用于匹配主题布局
-        data: { posts }          // 传递给主题插槽的数据源
+        data: { posts: posts.map(toStandardItem) } // 传递给主题插槽的数据源
       },
       ...posts.map(post => ({
         path: `/posts/${post.slug}`,
         pageType: 'post-detail', // 页面类型，用于匹配主题布局
-        data: { post }
+        data: { post: toStandardItem(post) }
       }))
     ];
 
@@ -324,8 +345,8 @@ export default {
 
 1. `loadContent` 读取文件并返回一个集合。
 2. 集合被存入 `ctx.collections`。
-3. `fetchData` 读取该集合并将其存入 `ctx.data` 下的 `blog.posts`。
-4. `generateRoutes` 使用 `ctx.collections` 构建路由，并将文章数据直接传递到每个路由的 `data` 字段。
+3. `fetchData` 读取该集合并将其清洗为 `AuraStandardItem[]` 后存入 `ctx.data` 下的 `blog.posts`。
+4. `generateRoutes` 使用 `ctx.collections` 构建路由，并将标准数据直接传递到每个路由的 `data` 字段。
 5. 主题渲染引擎根据 `pageType` 和 `themeOptions` 中的 `slots` 配置，从 `ctx.data` 或 `route.data` 获取数据并渲染视图。
 
 ### 主题配置示例
@@ -393,8 +414,8 @@ const tagRoutes = [...tags].map(tag => ({
 
 ## 11. 浏览器端脚本与样式
 
-- `entry.browser` 作为外部 `<script type="module">` 注入，指向 `assets/plugins/<pluginName>/<filename>`。
-- `entry.styles` 作为内联 `<style>` 注入到 `<head>` 中。
+- `entry.browser` 作为外部 `<script type="module">` 注入，指向绝对路径 `/assets/plugins/<pluginName>/<filename>`。由于使用绝对路径，子页面（如 `/posts/hello/`）也能正确加载资源。
+- `entry.styles` 作为内联 `<style>` 注入到 `<head>` 中，不生成外部文件引用。
 - 如果你需要添加动态客户端代码，可以从钩子（例如 `transformHtml` 或 `buildEnd`）中调用 `ctx.assets.add('js', code, 'body', 'dynamic.js', 'myplugin')`。
 - 框架在每个页面中注入全局事件总线 `window.AuraBus`。你可以用它来在不同浏览器脚本之间通信。
 - **重要：** 插件样式必须遵循 [Aura 标准生态契约](CONTRACT.zh.md)，使用 `.aura-ui-*` 类名和 `--aura-*` 变量以确保视觉一致性。
@@ -412,21 +433,22 @@ const tagRoutes = [...tags].map(tag => ({
 ## 13. 重要注意事项和陷阱
 
 - `loadContent`、`transformCollections` 和 `generateRoutes` 会**替换**整个数组，而不是合并。如果你想保留之前的值，必须显式复制（例如 `[...previous, ...new]`）。
-- `fetchData` 期望返回一个普通对象。如果返回 `undefined`，则不会存储任何数据。
+- `fetchData` 期望返回一个普通对象（非数组）。如果返回 `undefined` 或数组，则不会存储任何数据。
 - 路由上的 `collection` 字段不被核心渲染器使用——它仅用于信息传递。你必须将实际数据放在 `data` 中传递。
 - 主题渲染引擎通过 `ctx.data.getFlat()` 和 `route.data` 获取数据，并通过 `themeOptions` 中的 `bindings` 和 `slots` 配置进行映射。
 - 插件不再直接提供模板文件，而是通过数据绑定和视图标识符与主题协作。
+- 存入 `DataStore` 的数据必须清洗为契约标准类型（如 `AuraStandardItem`），不要直接抛出 `CollectionItem`。
 
 ---
 
 ## 14. 插件的完整生命周期
 
-1. `discoverAndLoadPlugins` 读取所有清单文件并加载 Node 入口。
+1. `discoverAndLoadPlugins` 读取用户项目根目录下所有清单文件并加载 Node 入口。
 2. 插件排序。
 3. 调用 `buildStart` 钩子。
 4. 依次执行 `loadContent` → `transformCollections` → `fetchData` → `generateRoutes`。
 5. 复制并注册 `entry.browser` 和 `entry.styles` 指定的资源文件。
-6. 加载并验证主题样式（检查 CSS 变量和原子类名）。
+6. 加载主题样式，检查 CSS 变量和原子类名，缺失时输出警告（不阻断构建）。
 7. 对每个路由：
    - 根据 `pageType` 和 `themeOptions` 确定布局。
    - 遍历 `slots` 配置，从 `ctx.data` 或 `route.data` 获取数据。
@@ -435,7 +457,3 @@ const tagRoutes = [...tags].map(tag => ({
    - 通过 `transformHtml` 注入资源。
    - 写入 HTML 文件。
 8. 调用 `buildEnd` 钩子。
-
----
-
-祝你编码愉快 —— 别忘了，本文档是 AI 生成的。如果仍有不清楚的地方，源代码才是真理。

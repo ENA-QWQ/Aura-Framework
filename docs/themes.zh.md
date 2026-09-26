@@ -34,8 +34,10 @@ Aura 的主题生态强调**通用性**，即同一个主题应能服务于博�
     "dev": "tsx src/cli.ts build --root ./playground",
     "build:core": "tsc"
   },
+  "dependencies": {
+    "tsx": "^4.7.0"
+  },
   "devDependencies": {
-    "tsx": "^4.7.0",
     "typescript": "^5.4.0",
     "@types/node": "^20.11.0"
   }
@@ -93,7 +95,7 @@ playground/themes/my-theme/
 
 ## 4. 核心类型与接口
 
-在开始编码之前，必须熟悉 Aura 暴露给主题的核心类型。这些类型定义在 `context.ts` 中。
+在开始编码之前，必须熟悉 Aura 暴露给主题的核心类型。这些类型定义在 `context.ts` 中，并全部通过框架包入口导出。
 
 ### 4.1 AuraContext
 
@@ -163,6 +165,48 @@ interface CollectionItem {
 }
 ```
 
+### 4.5 契约标准类型
+
+主题在视图和布局中会频繁使用契约定义的标准数据类型，这些类型已随框架一起导出，直接 import 即可：
+
+```typescript
+import type { AuraStandardItem, StandardNavItem, StandardTocItem } from 'aura-framework';
+
+interface AuraStandardItem {
+  id: string;
+  slug: string;
+  type: string;              // 比如 'post', 'doc', 'product'
+  url?: string;
+  title: string;
+  content?: string;          // 渲染后的 HTML
+  excerpt?: string;
+  metadata: {
+    date?: string;
+    updated?: string;
+    author?: string;
+    tags?: string[];
+    category?: string;
+    coverImage?: string;
+    [key: string]: any;
+  };
+  raw?: Record<string, any>;
+}
+
+interface StandardNavItem {
+  title: string;
+  url?: string;
+  children?: StandardNavItem[];
+  active?: boolean;
+  icon?: string;
+}
+
+interface StandardTocItem {
+  id: string;
+  text: string;
+  level: number;
+}
+```
+
 ---
 
 ## 5. 布局引擎（Layouts）深度解析
@@ -180,7 +224,7 @@ type LayoutFunction = (
 ```
 
 - **`ctx`**：完整上下文，可访问所有配置、数据、集合。
-- **`slotsHtml`**：由渲染引擎根据 `themeOptions.slots` 配置预先渲染好的各插槽 HTML 字符串集合。键为插槽名（如 `'header'`, `'aside-start'`）。
+- **`slotsHtml`**：由渲染引擎根据 `themeOptions.slots` 配置预先渲染好的各插槽 HTML 字符串集合。键为插槽名（如 `'header'`, `'main'`, `'aside-start'`）。
 - **`route`**：当前正在渲染的路由对象。
 
 ### 5.2 布局的核心职责
@@ -191,7 +235,21 @@ type LayoutFunction = (
 3. 根据 `slotsHtml` 中的内容，将其放置在正确的 DOM 位置（如 `<header>`, `<aside>`, `<main>`）。
 4. **不要**在布局中手动引入 `<style>` 或 `<script>` 来加载插件资源——Aura 的渲染器（`renderer.ts`）会在 `</head>` 前和 `</body>` 前自动注入。
 
-### 5.3 高级布局技巧
+### 5.3 标准插槽
+
+`slotsHtml` 的键由 `themeOptions.slots` 配置决定。契约推荐以下标准插槽名：
+
+- `header`：全局顶部区域
+- `main`：主内容区
+- `footer`：全局底部区域
+- `aside-start`：侧边栏起始位置（通常为左）
+- `aside-end`：侧边栏结束位置（通常为右）
+- `content-before`：主内容区正上方
+- `content-after`：主内容区正下方
+
+**关于 `main` 插槽的兜底行为**：若用户在 `themeOptions.slots` 中未显式配置 `main`，渲染器会自动注入 `{ view: 'page' }`，并以 `route.data` 作为数据源。因此主题只要提供 `views/page.ts`，主内容区就会有内容；若 `views/page.ts` 不存在，会降级到 `views/list.ts`。
+
+### 5.4 高级布局技巧
 
 **动态标题生成**：
 
@@ -205,14 +263,14 @@ export default function layout(ctx, slotsHtml, route) {
   const headerHtml = slotsHtml['header'] || '';
   const footerHtml = slotsHtml['footer'] || '';
   const contentBefore = slotsHtml['content-before'] || '';
-  const mainContent = slotsHtml['main'] || ''; // 假设主内容插槽名为 'main'
+  const mainContent = slotsHtml['main'] || '';
   const contentAfter = slotsHtml['content-after'] || '';
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>${title}</meta>
+  <title>${title}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body>
@@ -317,6 +375,8 @@ export default function renderList(data, ctx, props) {
 }
 ```
 
+**关于视图抛错**：渲染器会在每个插槽的视图调用外层加 try/catch。单个视图抛错不会中断整页渲染——出错时该插槽输出空字符串，其余插槽正常渲染。
+
 ---
 
 ## 7. 数据流与数据访问模式
@@ -331,11 +391,11 @@ export default function renderList(data, ctx, props) {
 4. **路由解析**（`resolveRoutes`）：生成路由列表。
 5. **`generateRoutes`** 钩子：插件修改路由（可在此为 `route.data` 附加数据）。
 6. **渲染阶段**：
-  - 渲染引擎读取 `themeOptions.bindings` 和 `themeOptions.slots`。
-  - 根据 `binding` 从 `ctx.data.getFlat()` 提取数据。
-  - 根据 `source` 从 `route.data` 提取数据。
-  - 调用对应的 `view` 函数生成 HTML。
-  - 调用 `layout` 函数组装最终页面。
+- 渲染引擎读取 `themeOptions.bindings` 和 `themeOptions.slots`。
+- 根据 `binding` 从 `ctx.data` 提取数据。
+- 根据 `source` 从 `route.data` 提取数据。
+- 调用对应的 `view` 函数生成 HTML。
+- 调用 `layout` 函数组装最终页面。
 
 **主题可用的数据来源**：
 
@@ -374,6 +434,7 @@ interface MyThemeOptions {
   
   // 插槽视图
   slots: {
+    'main': { source: 'route.data' };
     'header': { view: 'site-header', props: { showLogo: true } };
     'aside-start': { view: 'tree-nav', binding: 'sidebar' };
     'content-after': { view: 'comments', binding: 'comments' };
@@ -396,7 +457,7 @@ export default function renderList(data, ctx, props) {
     <div class="c-list">
       ${items.map(item => `
         <article class="aura-ui-card">
-          ${showImage && item.coverImage ? `<img class="aura-ui-avatar" src="${item.coverImage}" />` : ''}
+          ${showImage && item.metadata?.coverImage ? `<img class="aura-ui-avatar" src="${item.metadata.coverImage}" />` : ''}
           <h3 class="aura-ui-typography-h3"><a href="${item.url || item.slug}">${item.title}</a></h3>
           ${showExcerpt && item.excerpt ? `<p class="aura-ui-typography-body">${item.excerpt}</p>` : ''}
         </article>
@@ -458,13 +519,13 @@ export default function renderPostCard(data, ctx, props) {
     <div class="aura-ui-card">
       ${data.author ? renderAvatar(data.author.avatar, data.author.name) : ''}
       <h3 class="aura-ui-typography-h3">${data.title}</h3>
-      ${data.tags ? data.tags.map(t => renderBadge(t)).join(' ') : ''}
+      ${data.metadata?.tags ? data.metadata.tags.map(t => renderBadge(t)).join(' ') : ''}
     </div>
   `;
 }
 ```
 
-**注意**：由于 Aura 使用 `import()` 动态加载视图，请确保导入路径使用相对路径并包含 `.js` 扩展名。
+**注意**：由于 Aura 使用 `import()` 动态加载视图，请确保导入路径使用相对路径并包含 `.js` 扩展名。运行时 CLI 已注册 `tsx` ESM loader，因此 `.ts` 视图也能被正确加载。
 
 ---
 
@@ -525,7 +586,7 @@ export default function renderTagCloud(data, ctx, props) {
 ```typescript
 // views/post-detail.ts
 export default function renderPostDetail(data, ctx, props) {
-  // 假定插件已填充 route.data.item，并通过 source: 'item' 传入
+  // 假定插件已填充 route.data.post，并通过 source: 'post' 传入
   const item = data; 
   if (!item) {
     return `<div class="aura-ui-typography-body">内容未找到</div>`;
@@ -538,8 +599,8 @@ export default function renderPostDetail(data, ctx, props) {
   return `
     <article class="aura-ui-card">
       <h1 class="aura-ui-typography-h1">${item.title || '无标题'}</h1>
-      ${showDate && item.date ? `<div class="meta"><time class="aura-ui-typography-body">${new Date(item.date).toLocaleDateString()}</time></div>` : ''}
-      ${showAuthor && item.author ? `<div class="author aura-ui-typography-body">作者：${item.author}</div>` : ''}
+      ${showDate && item.metadata?.date ? `<div class="meta"><time class="aura-ui-typography-body">${new Date(item.metadata.date).toLocaleDateString()}</time></div>` : ''}
+      ${showAuthor && item.metadata?.author ? `<div class="author aura-ui-typography-body">作者：${item.metadata.author}</div>` : ''}
       <div class="content aura-ui-typography-body">${item.content || ''}</div>
     </article>
   `;
@@ -567,6 +628,10 @@ Aura 不会主动处理 `assets/` 目录，资源引用路径相对于输出文�
 
 构建时，`pipeline.ts` 会执行 `cp(publicDir, outDir, { recursive: true })`，将 `public/` 下所有内容复制到输出目录根路径。因此，`public/favicon.ico` 可通过 `/favicon.ico` 访问。
 
+### 12.3 主题样式的注入方式
+
+主题的 `styles.css` 会被渲染器以内联 `<style>` 方式注入每个页面的 `<head>` 中，不生成外部文件引用。因此主题样式中若使用 `url()` 引用相对资源，路径会相对于当前页面路径解析，容易失效。推荐将所有静态资源放在 `public/` 目录，通过绝对路径引用。
+
 ---
 
 ## 13. TypeScript 开发指南
@@ -581,8 +646,8 @@ Aura 不会主动处理 `assets/` 目录，资源引用路径相对于输出文�
 // types.ts
 export interface MyThemeOptions {
   layouts?: Record<string, string>;
-  bindings?: Record<string, { source: string; target: string }>;
-  slots?: Record<string, { view: string; binding?: string; source?: string; props?: any }>;
+  bindings?: Record<string, { source: 'datastore' | 'collection'; target: string }>;
+  slots?: Record<string, { view?: string; binding?: string; source?: string; props?: any }>;
 }
 ```
 
@@ -594,21 +659,22 @@ export interface MyThemeOptions {
 // ambient.d.ts
 import { MyThemeOptions } from './types.js';
 
-declare module '../core/context.js' {
+declare module 'aura-framework' {
   interface ResolvedConfig {
     themeOptions?: MyThemeOptions;
   }
 }
 ```
 
-**注意**：因 Aura 使用动态导入，类型扩展仅用于开发时的智能提示，不影响运行时行为。
+**注意**：模块名必须与框架 `package.json` 中的 `name` 字段一致（当前为 `aura-framework`）。因为 Aura 使用动态导入，类型扩展仅用于开发时的智能提示，不影响运行时行为。
 
 ### 13.3 带类型的视图写法
 
+标准数据类型（`AuraStandardItem`、`StandardNavItem`、`StandardTocItem`）和核心上下文类型（`AuraContext`）均从框架包入口导出：
+
 ```typescript
 // views/tree-nav.ts
-import type { AuraContext } from '../../../src/core/context.js';
-import type { StandardNavItem } from '../../../CONTRACT.zh.md'; // 假设引用契约类型
+import type { AuraContext, StandardNavItem } from 'aura-framework';
 
 interface TreeNavProps {
   collapsible?: boolean;
@@ -657,9 +723,10 @@ return `<pre>${JSON.stringify({ data, props }, null, 2)}</pre>`;
 |----------|----------|----------|
 | `Cannot find module` | 视图/布局导入路径错误 | 使用相对路径并确认文件扩展名（`.ts` 或 `.js`） |
 | 页面空白 | 布局/视图函数未返回字符串 | 确保默认导出返回 `string` |
-| 样式未生效 | `styles.css` 缺失契约变量或类名 | 运行构建，检查 `[Aura] Theme styles validation failed` 错误 |
+| 样式未生效 | `styles.css` 缺失契约变量或类名 | 运行构建，检查 `[Aura] Theme styles validation warnings` 输出 |
 | 数据为空 | `bindings` 配置的 `target` 与插件不匹配 | 打印 `ctx.data.getFlat()` 检查实际结构 |
 | 视图未找到 | `views/` 下缺少对应文件且无 `list.ts` 降级 | 创建 `views/list.ts` 作为通用降级视图 |
+| 主内容区空白 | `slots` 未配置 `main` 且主题没有 `views/page.ts` | 提供 `views/page.ts` 或在用户配置中显式配置 `main` |
 
 ---
 
@@ -675,6 +742,7 @@ playground/themes/barebone/
 │   └── single.ts
 ├── views/
 │   ├── list.ts
+│   ├── page.ts
 │   └── site-header.ts
 ├── styles.css
 └── README.md
@@ -703,6 +771,19 @@ playground/themes/barebone/
   border: 1px solid var(--aura-color-border);
   border-radius: var(--aura-radius-md);
   padding: var(--aura-space-md);
+}
+
+.aura-ui-input {
+  border: 1px solid var(--aura-color-border);
+  border-radius: var(--aura-radius-md);
+  padding: 0.5rem;
+}
+
+.aura-ui-badge {
+  background: var(--aura-color-primary);
+  color: white;
+  border-radius: var(--aura-radius-md);
+  padding: 0.125rem 0.5rem;
 }
 
 .aura-ui-typography-h1 {
@@ -784,6 +865,21 @@ export default function renderList(data, ctx, props) {
 }
 ```
 
+**`views/page.ts`**：
+
+```typescript
+export default function renderPage(data, ctx, props) {
+  const item = data?.post || data?.doc || data;
+  if (!item) return '';
+  return `
+    <article class="aura-ui-card">
+      <h1 class="aura-ui-typography-h1">${item.title || ''}</h1>
+      <div class="aura-ui-typography-body">${item.content || ''}</div>
+    </article>
+  `;
+}
+```
+
 用户配置示例：
 
 ```typescript
@@ -800,7 +896,7 @@ export default {
     },
     slots: {
       'header': { view: 'site-header' },
-      'main': { view: 'list', binding: 'blogPosts' }
+      'main': { source: 'route.data' }
     },
     nav: [{ label: 'Home', url: '/' }]
   }

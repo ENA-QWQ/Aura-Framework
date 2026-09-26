@@ -1,16 +1,19 @@
 import { readdir, stat, readFile } from 'fs/promises';
-import { join, dirname, resolve } from 'path';
-import { fileURLToPath, pathToFileURL } from 'url';
-import { AuraContext, LoadedPlugin, PluginManifest, PluginHooks, ResolvedConfig } from './context.js';
+import { join } from 'path';
+import { pathToFileURL } from 'url';
+import {
+    AuraContext,
+    LoadedPlugin,
+    PluginManifest,
+    PluginHooks,
+    ResolvedConfig
+} from './context.js';
 import { topologicalSort, PluginNode } from './graph.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const frameworkRoot = resolve(__dirname, '../../');
-
 export async function discoverAndLoadPlugins(config: ResolvedConfig): Promise<LoadedPlugin[]> {
-    const pluginsDir = join(frameworkRoot, 'plugins');
+    const pluginsDir = join(config.root, 'plugins');
     const loaded: LoadedPlugin[] = [];
+
     try {
         await stat(pluginsDir);
     } catch {
@@ -84,9 +87,10 @@ export async function runHook<K extends keyof PluginHooks>(
         for (const plugin of plugins) {
             const hook = plugin[hookName];
             if (typeof hook !== 'function') continue;
+
             try {
                 const result = await (hook as Function)(ctx);
-                if (result && typeof result === 'object') {
+                if (result && typeof result === 'object' && !Array.isArray(result)) {
                     for (const [key, value] of Object.entries(result)) {
                         const schema = plugin.manifest.schema?.[key];
                         ctx.data.set(plugin.manifest.name, key, value, schema);
@@ -104,13 +108,15 @@ export async function runHook<K extends keyof PluginHooks>(
         if (typeof hook !== 'function') continue;
 
         try {
-            const isWaterfall = hookName === 'transformHtml' || hookName === 'transformCollections' || hookName === 'loadContent' || hookName === 'generateRoutes';
-            let result;
-            if (isWaterfall) {
-                result = await (hook as Function)(payload, ctx, ...extraArgs);
-            } else {
-                result = await (hook as Function)(ctx);
-            }
+            const isWaterfall =
+                hookName === 'transformHtml' ||
+                hookName === 'transformCollections' ||
+                hookName === 'loadContent' ||
+                hookName === 'generateRoutes';
+
+            const result = isWaterfall
+                ? await (hook as Function)(payload, ctx, ...extraArgs)
+                : await (hook as Function)(ctx);
 
             if (result !== undefined) payload = result;
         } catch (error) {
