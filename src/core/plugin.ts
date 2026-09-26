@@ -11,7 +11,7 @@ import {
 import { topologicalSort, PluginNode } from './graph.js';
 
 export async function discoverAndLoadPlugins(config: ResolvedConfig): Promise<LoadedPlugin[]> {
-    const pluginsDir = join(config.root, 'plugins');
+    const pluginsDir = join(config.srcDir, 'plugins');
     const loaded: LoadedPlugin[] = [];
 
     try {

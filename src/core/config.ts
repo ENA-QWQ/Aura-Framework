@@ -26,6 +26,7 @@ export async function loadConfig(root: string): Promise<ResolvedConfig> {
         plugins: userConfig.plugins || [],
         site: userConfig.site || { title: 'Aura Site' },
         routes: userConfig.routes || [],
+        pluginOptions: userConfig.pluginOptions || {},
         themeOptions: userConfig.themeOptions || {}
     };
 

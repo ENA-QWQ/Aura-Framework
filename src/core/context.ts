@@ -1,6 +1,6 @@
 import { SchemaDefinition, validate } from './schema.js';
 
-export interface SiteConfig { title: string; description?: string; }
+export interface SiteConfig { title: string; description?: string; [key: string]: any; }
 
 export interface RouteBlueprint {
     path: string;
@@ -13,6 +13,7 @@ export interface UserConfig {
     theme: string;
     plugins: string[];
     routes: RouteBlueprint[];
+    pluginOptions?: Record<string, any>;
     themeOptions?: any;
     [key: string]: any;
 }
@@ -21,6 +22,7 @@ export interface ResolvedConfig extends UserConfig {
     root: string;
     outDir: string;
     srcDir: string;
+    pluginOptions: Record<string, any>;
     themeOptions: any;
 }
 
@@ -87,6 +89,37 @@ export class DataStore {
     }
 }
 
+export class ServicesRegistry {
+    private services = new Map<string, any>();
+
+    register(name: string, impl: any): void {
+        if (this.services.has(name)) {
+            throw new Error(`[Aura] Service "${name}" is already registered`);
+        }
+        this.services.set(name, impl);
+    }
+
+    get<T = any>(name: string): T | undefined {
+        return this.services.get(name) as T | undefined;
+    }
+
+    require<T = any>(name: string): T {
+        const impl = this.services.get(name);
+        if (!impl) {
+            throw new Error(`[Aura] Service "${name}" is not registered`);
+        }
+        return impl as T;
+    }
+
+    has(name: string): boolean {
+        return this.services.has(name);
+    }
+
+    list(): string[] {
+        return Array.from(this.services.keys());
+    }
+}
+
 export class AssetManager {
     private assets: AssetDescriptor[] = [];
     add(type: 'css' | 'js', content: string, inject: 'head' | 'body', filename?: string, pluginName?: string) {
@@ -100,6 +133,7 @@ export interface AuraContext {
     collections: Collection[];
     routes: Route[];
     data: DataStore;
+    services: ServicesRegistry;
     assets: AssetManager;
     components: Map<string, Function>;
     viewRegistry: Map<string, Function>;
@@ -110,6 +144,7 @@ export class Context implements AuraContext {
     collections: Collection[] = [];
     routes: Route[] = [];
     data: DataStore = new DataStore();
+    services: ServicesRegistry = new ServicesRegistry();
     assets: AssetManager = new AssetManager();
     components: Map<string, Function> = new Map();
     viewRegistry: Map<string, Function> = new Map();
@@ -126,6 +161,7 @@ export interface PluginManifest {
     version?: string;
     enforce?: 'pre' | 'normal' | 'post';
     dependencies?: string[];
+    provides?: string[];
     schema?: Record<string, SchemaDefinition>;
     modules?: PluginModule[];
     entry?: { node?: string; browser?: string; styles?: string; };
