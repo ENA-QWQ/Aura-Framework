@@ -48,7 +48,12 @@ export async function renderRoute(route: Route, ctx: AuraContext): Promise<strin
             const bindingConfig = bindings[slotConfig.binding];
             data = resolveBinding(bindingConfig, ctx);
         } else if (slotConfig.source) {
-            data = resolvePath(route.data, slotConfig.source);
+            const src = slotConfig.source;
+            if (src === 'route.data' || src === 'route' || src === '.') {
+                data = route.data;
+            } else {
+                data = resolvePath(route.data, src);
+            }
         } else if (slotName === 'main') {
             data = route.data;
         }
